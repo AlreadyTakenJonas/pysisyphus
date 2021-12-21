@@ -24,6 +24,7 @@ class Params(luigi.Config):
     is_base = luigi.BoolParameter(default=False)
     charge = luigi.IntParameter(default=0)
     base = luigi.Parameter(default="out")
+    acidset = luigi.Parameter()
 
     @property
     def key(self):
@@ -31,7 +32,7 @@ class Params(luigi.Config):
 
     @property
     def out_dir(self):
-        return Path(f"{self.base}_{self.key}")
+        return Path(f"{self.base}_{self.acidset}/{self.key}")
 
     def get_path(self, fn):
         out_dir = self.out_dir
@@ -62,7 +63,7 @@ class InputGeometry(Params, luigi.Task):
 
     def requires(self):
         if self.is_base:
-            return Minimization(self.id_, self.name, self.h_ind, is_base=False)
+            return Minimization(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset)
         else:
             return None
 
@@ -85,7 +86,7 @@ class PreMinimization(Params, luigi.Task):
         return luigi.LocalTarget(self.get_path("preopt.xyz"))
 
     def requires(self):
-        return InputGeometry(self.id_, self.name, self.h_ind, self.is_base)
+        return InputGeometry(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
 
     def run(self):
         geom = geom_loader(self.input().path, coord_type="redund")
@@ -120,10 +121,10 @@ class Minimization(Params, luigi.Task):
         # Maybe some cycles could be saved when the base is also pre-
         # optimized, but things could also go wrong.
         if self.is_base:
-            return InputGeometry(self.id_, self.name, self.h_ind, self.is_base)
+            return InputGeometry(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
         # Only preoptimize initial acid geometry, not the base.
         else:
-            return PreMinimization(self.id_, self.name, self.h_ind, self.is_base)
+            return PreMinimization(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
 
     def run(self):
         geom = geom_loader(self.input().path, coord_type="redund")
@@ -185,7 +186,7 @@ class SolvEnergy(Params, luigi.Task):
         return luigi.LocalTarget(self.get_path("solv_energy"))
 
     def requires(self):
-        return Minimization(self.id_, self.name, self.h_ind, self.is_base)
+        return Minimization(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
 
     def run(self):
         geom = geom_loader(self.input()[0].path)
@@ -203,10 +204,10 @@ class DirectCycle(Params, luigi.Task):
 
     def requires(self):
         return (
-            Minimization(self.id_, self.name, self.h_ind, is_base=False),
-            Minimization(self.id_, self.name, self.h_ind, is_base=True),
-            SolvEnergy(self.id_, self.name, self.h_ind, is_base=False),
-            SolvEnergy(self.id_, self.name, self.h_ind, is_base=True),
+            Minimization(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset),
+            Minimization(self.id_, self.name, self.h_ind, is_base=True, acidset=self.acidset),
+            SolvEnergy(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset),
+            SolvEnergy(self.id_, self.name, self.h_ind, is_base=True, acidset=self.acidset),
         )
 
     def run(self):
@@ -239,25 +240,63 @@ class DirectCycle(Params, luigi.Task):
             yaml.dump(results, handle)
 
 
-class DirectCycler(luigi.WrapperTask):
-    yaml_inp = luigi.Parameter()
+class DirectCycler(luigi.Task):
+    acidlist = luigi.Parameter()
+    acidset = luigi.Parameter()
+    
+    def output(self):
+        return luigi.LocalTarget(Path(f"out_{self.acidset}/{self.acidset}_summary.yaml"))
+    
+    def requires(self):
+        acids = yaml.safe_load(self.acidlist)
+        
+        for id_, (acid, acid_dict) in enumerate(acids.items()):
+            h_ind = acid_dict["h_ind"]
+            name = acid
+            yield DirectCycle(id_=id_, name=name, h_ind=h_ind, acidset=self.acidset)
+    
+    def run(self):
+        res = {}
+        for dc in self.input():
+            with dc.open() as handle:
+                results = yaml.load(handle, Loader=yaml.SafeLoader)
+                name = results["name"]
+                pKa_calc = results["pKa_calc"]
+                # Get the experimental pka values if given (only known for training and validation)
+                acidlist = yaml.safe_load(self.acidlist)
+                if self.acidset == "targetset": 
+                    pka_exp = None
+                else:
+                    pka_exp = acidlist[name]["pks_exp"]
+                res[name] = {
+                    "pKa_calc": pKa_calc,
+                    "pKa_exp": pka_exp
+                    }
+            print("@@@", dc.path, pKa_calc)
+            
+        with self.output().open("w") as handle:
+            yaml.dump(res, handle)
 
+class RegressionComputer(luigi.WrapperTask):
+    yaml_inp = luigi.Parameter()
+    
     def requires(self):
         with open(self.yaml_inp) as handle:
             run_dict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
-
-        for id_, (acid, acid_dict) in enumerate(run_dict["acids"].items()):
-            fn = acid_dict["fn"]
-            h_ind = acid_dict["h_ind"]
-            name = Path(fn).stem
-            yield DirectCycle(id_=id_, name=name, h_ind=h_ind)
+        
+        # Dump the dictionaries into text, so they can be saved in a luigi parameter.
+        trainingset   = yaml.dump(run_dict["trainingset"])
+        validationset = yaml.dump(run_dict["validationset"])
+        targetset     = yaml.dump(run_dict["targetacids"])
+        return( DirectCycler(acidlist=trainingset  , acidset="trainingset"  ),
+                DirectCycler(acidlist=validationset, acidset="validationset"),
+                DirectCycler(acidlist=targetset    , acidset="targetset"    ) )
 
     def run(self):
         for dc in self.input():
             with dc.open() as handle:
                 results = yaml.load(handle, Loader=yaml.SafeLoader)
-                pKa_calc = results["pKa_calc"]
-            print("@@@", dc.path, pKa_calc)
+            print("@@@", results)
 
 
 def parse_args(args):
@@ -272,9 +311,12 @@ def run():
 
     with open(args.yaml) as handle:
         run_dict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
-
+    
+    # Get a dict of all acids. Merging all dictionaries with acids.
+    acid_list = run_dict["trainingset"] | run_dict["validationset"] | run_dict["targetacids"]
+    # Get a list of all geoemetries and abstracted protons
     inputs = list()
-    for acid, acid_dict in run_dict["acids"].items():
+    for acid, acid_dict in acid_list.items():
         fn = acid_dict["fn"]
         h_ind = acid_dict["h_ind"]
         assert Path(fn).exists(), f"File '{fn}' does not exist!"
@@ -304,11 +346,6 @@ def run():
     }
     calc_cls = calc_dict[gas_calc_cls]
 
-    cycles = list()
-    for id_, (fn, h_ind) in enumerate(inputs):
-        name = Path(fn).stem
-        cycles.append(DirectCycle(id_=id_, name=name, h_ind=h_ind))
-
     global get_calc
 
     def get_calc(charge, out_dir):
@@ -333,7 +370,7 @@ def run():
         return XTB(pal=pal, charge=charge, out_dir=out_dir, base_name="xtb")
 
     luigi.build(
-        (DirectCycler(args.yaml), ),
+        (RegressionComputer(args.yaml), ),
         local_scheduler=True,
     )
 
