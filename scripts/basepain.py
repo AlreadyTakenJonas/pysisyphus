@@ -271,14 +271,19 @@ class DirectCycler(luigi.Task):
                 res[name] = {
                     "pKa_calc": pKa_calc,
                     "pKa_exp": pka_exp
-                    }
+                    } 
             print("@@@", dc.path, pKa_calc)
+        
+        summary = {f"{self.acidset}": res}
             
         with self.output().open("w") as handle:
-            yaml.dump(res, handle)
+            yaml.dump(summary, handle)
 
-class RegressionComputer(luigi.WrapperTask):
+class LFER_Correction(luigi.Task):
     yaml_inp = luigi.Parameter()
+    
+    def output(self):
+        return( luigi.LocalTarget(Path("out_LFER-correction/LFER_summary.yaml")) )
     
     def requires(self):
         with open(self.yaml_inp) as handle:
@@ -293,11 +298,40 @@ class RegressionComputer(luigi.WrapperTask):
                 DirectCycler(acidlist=targetset    , acidset="targetset"    ) )
 
     def run(self):
+        results = {}
+        print("DIRECT CYCLES DONE. RESULT OF COMPUTATION:")
         for dc in self.input():
             with dc.open() as handle:
-                results = yaml.load(handle, Loader=yaml.SafeLoader)
-            print("@@@", results)
+                res = yaml.load(handle, Loader=yaml.SafeLoader)
+                print(yaml.dump(res))
+            results = results | res
+        
+        # DO LFER, validation and correct the target molecules pKa-values
+        
+        # 1. Reformat the input data from the previous task
+        
+        # 2. Do LFER
+        
+        # 3. Do validation
+        
+        # 4. Apply LFER-correction to target molecules
+        
+        with self.output().open("w") as handle:
+            pass
+            # REDO THIS PART AND DUMP THE RESULT OF THE LFER, validation and correction
+            #yaml.dump(results, handle)
+            
+        
 
+class TaskScheduler(luigi.WrapperTask):
+    yaml_inp = luigi.Parameter()
+    
+    def requires(self):
+        return( LFER_Correction(self.yaml_inp) )
+    
+    def run(self):
+        pass
+        
 
 def parse_args(args):
     parser = argparse.ArgumentParser()
@@ -370,7 +404,7 @@ def run():
         return XTB(pal=pal, charge=charge, out_dir=out_dir, base_name="xtb")
 
     luigi.build(
-        (RegressionComputer(args.yaml), ),
+        (TaskScheduler(args.yaml), ),
         local_scheduler=True,
     )
 
