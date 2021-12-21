@@ -16,6 +16,7 @@ from pysisyphus.drivers.pka import direct_cycle, G_aq_from_h5_hessian
 from pysisyphus.helpers import geom_loader, do_final_hessian
 from pysisyphus.optimizers.RFOptimizer import RFOptimizer
 
+import pysisyphus.LinearFreeEnergyRelation as LFER
 
 class Params(luigi.Config):
     id_ = luigi.IntParameter()
@@ -307,19 +308,54 @@ class LFER_Correction(luigi.Task):
             results = results | res
         
         # DO LFER, validation and correct the target molecules pKa-values
-        
         # 1. Reformat the input data from the previous task
+        trainingset = {
+            "pKa_calc": [ acid["pKa_calc"] for acid in results["trainingset"].values() ],
+            "pKa_exp" : [ acid["pKa_exp"]  for acid in results["trainingset"].values() ],
+            "name"    : list( results["trainingset"].keys() ) }
+        validationset = {
+            "pKa_calc": [ acid["pKa_calc"] for acid in results["validationset"].values() ],
+            "pKa_exp" : [ acid["pKa_exp"]  for acid in results["validationset"].values() ],
+            "name"    : list( results["validationset"].keys() ) }
+        targetset = {
+            "pKa_calc": [ acid["pKa_calc"] for acid in results["targetset"].values() ],
+            "name"    : list( results["targetset"].keys() ) }
         
         # 2. Do LFER
+        # Pass the data to the LFER-model
+        # This call also fits the trainingsset with a linear model
+        model = LFER.Regression(trainingset, validationset, targetset,
+                                xlabel="pKa_calc", ylabel="pKa_exp", namelabel="name")
         
         # 3. Do validation
+        mean_square_error, square_errors, validation_prediction = model.validate()
         
         # 4. Apply LFER-correction to target molecules
+        pka_corrected = model.lfer_correction()
         
+        # 5. Add more information so it can be dumped to file later
+        # Add mean_square_error to the pka_corrected dictionary
+        summary = {
+            "acids": pka_corrected,
+            "info": {
+                "lfer": {
+                    "intercept": float(model().intercept_),
+                    "slope": float(model().coef_) 
+                    },
+                "validation": {
+                    "mean_square_error": mean_square_error,
+                    "square_errors": square_errors,
+                    "acids": validation_prediction
+                    }
+                }
+            }
+        
+        # 6. Create plot
+        # TODO: CREATE A PLOT OF THE LINEAR REGRESSION
+        
+        print(f"@@@ LFER CORRECTION DONE\n{yaml.dump(summary)}")
         with self.output().open("w") as handle:
-            pass
-            # REDO THIS PART AND DUMP THE RESULT OF THE LFER, validation and correction
-            #yaml.dump(results, handle)
+            yaml.dump(summary, handle)
             
         
 
