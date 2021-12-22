@@ -33,7 +33,7 @@ class Params(luigi.Config):
 
     @property
     def out_dir(self):
-        return Path(f"{self.base}_{self.acidset}/{self.key}")
+        return Path(f"output/{self.base}_{self.name}")
 
     def get_path(self, fn):
         out_dir = self.out_dir
@@ -246,7 +246,7 @@ class DirectCycler(luigi.Task):
     acidset = luigi.Parameter()
     
     def output(self):
-        return luigi.LocalTarget(Path(f"out_{self.acidset}/{self.acidset}_summary.yaml"))
+        return luigi.LocalTarget(Path(f"output/{self.acidset}_summary.yaml"))
     
     def requires(self):
         acids = yaml.safe_load(self.acidlist)
@@ -284,7 +284,7 @@ class LFER_Correction(luigi.Task):
     yaml_inp = luigi.Parameter()
     
     def output(self):
-        return( luigi.LocalTarget(Path("out_LFER-correction/LFER_summary.yaml")) )
+        return( luigi.LocalTarget(Path("output/LFER_summary.yaml")) )
     
     def requires(self):
         with open(self.yaml_inp) as handle:
