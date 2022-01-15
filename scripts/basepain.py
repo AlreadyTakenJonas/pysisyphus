@@ -20,13 +20,13 @@ import pysisyphus.LinearFreeEnergyRelation as LFER
 
 class Params(luigi.Config):
     id_ = luigi.IntParameter()
-    fn = luigi.Parameter()
     name = luigi.Parameter()
     h_ind = luigi.IntParameter()
     is_base = luigi.BoolParameter(default=False)
     charge = luigi.IntParameter(default=0)
     base = luigi.Parameter(default="out")
     acidset = luigi.Parameter()
+    fn = luigi.Parameter()
 
     @property
     def key(self):
