@@ -20,6 +20,7 @@ import pysisyphus.LinearFreeEnergyRelation as LFER
 
 class Params(luigi.Config):
     id_ = luigi.IntParameter()
+    fn = luigi.Parameter()
     name = luigi.Parameter()
     h_ind = luigi.IntParameter()
     is_base = luigi.BoolParameter(default=False)
@@ -76,7 +77,7 @@ class InputGeometry(Params, luigi.Task):
             assert acid_geom.atoms[self.h_ind].lower() == "h", f"Deriving geometry of the base from optimised acid failed! Atom index {self.h_ind} in {self.input()[0].path} is '{acid_geom.atoms[self.h_ind].lower()}' not 'h'."
             geom = acid_geom.get_subgeom_without((self.h_ind,))
         else:
-            geom = geom_queue[self.id_]
+            geom = geom_loader(self.fn)
 
         with self.output().open("w") as handle:
             handle.write(geom.as_xyz())
@@ -87,7 +88,7 @@ class PreMinimization(Params, luigi.Task):
         return luigi.LocalTarget(self.get_path("preopt.xyz"))
 
     def requires(self):
-        return InputGeometry(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
+        return InputGeometry(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn)
 
     def run(self):
         geom = geom_loader(self.input().path, coord_type="redund")
@@ -122,10 +123,10 @@ class Minimization(Params, luigi.Task):
         # Maybe some cycles could be saved when the base is also pre-
         # optimized, but things could also go wrong.
         if self.is_base:
-            return InputGeometry(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
+            return InputGeometry(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn)
         # Only preoptimize initial acid geometry, not the base.
         else:
-            return PreMinimization(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
+            return PreMinimization(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn)
 
     def run(self):
         geom = geom_loader(self.input().path, coord_type="redund")
@@ -194,7 +195,7 @@ class SolvEnergy(Params, luigi.Task):
         return luigi.LocalTarget(self.get_path("solv_energy"))
 
     def requires(self):
-        return Minimization(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset)
+        return Minimization(self.id_, self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn)
 
     def run(self):
         geom = geom_loader(self.input()[0].path)
@@ -212,10 +213,10 @@ class DirectCycle(Params, luigi.Task):
 
     def requires(self):
         return (
-            Minimization(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset),
-            Minimization(self.id_, self.name, self.h_ind, is_base=True, acidset=self.acidset),
-            SolvEnergy(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset),
-            SolvEnergy(self.id_, self.name, self.h_ind, is_base=True, acidset=self.acidset),
+            Minimization(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn),
+            Minimization(self.id_, self.name, self.h_ind, is_base=True, acidset=self.acidset, fn=self.fn),
+            SolvEnergy(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn),
+            SolvEnergy(self.id_, self.name, self.h_ind, is_base=True, acidset=self.acidset, fn=self.fn),
         )
 
     def run(self):
@@ -261,7 +262,8 @@ class DirectCycler(luigi.Task):
         for id_, (acid, acid_dict) in enumerate(acids.items()):
             h_ind = acid_dict["h_ind"]
             name = acid
-            yield DirectCycle(id_=id_, name=name, h_ind=h_ind, acidset=self.acidset)
+            fn = acid_dict["fn"]
+            yield DirectCycle(id_=id_, name=name, h_ind=h_ind, acidset=self.acidset, fn=fn)
     
     def run(self):
         res = {}
@@ -403,9 +405,6 @@ def run():
         ), f"Atom at index {h_ind} in '{fn}' is not a hydrogen atom!"
         print(f"Checked {acid}.")
         inputs.append((fn, h_ind))
-
-    global geom_queue
-    geom_queue = [geom_loader(fn) for fn, _ in inputs]
 
     # Calculator setup
     pal = psutil.cpu_count(logical=False)
