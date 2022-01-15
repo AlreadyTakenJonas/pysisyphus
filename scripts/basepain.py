@@ -73,7 +73,7 @@ class InputGeometry(Params, luigi.Task):
         if self.is_base:
             acid_geom = geom_loader(self.input()[0].path)
             # Be sure that it is actually an H atom.
-            assert acid_geom.atoms[self.h_ind].lower() == "h"
+            assert acid_geom.atoms[self.h_ind].lower() == "h", f"Deriving geometry of the base from optimised acid failed! Atom index {self.h_ind} in {self.input()[0].path} is '{acid_geom.atoms[self.h_ind].lower()}' not 'h'."
             geom = acid_geom.get_subgeom_without((self.h_ind,))
         else:
             geom = geom_queue[self.id_]
