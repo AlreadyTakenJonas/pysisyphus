@@ -65,7 +65,7 @@ class InputGeometry(Params, luigi.Task):
 
     def requires(self):
         if self.is_base:
-            return Minimization(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset)
+            return Minimization(self.id_, self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn)
         else:
             return None
 
