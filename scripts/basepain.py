@@ -11,6 +11,9 @@ import luigi
 import psutil
 import yaml
 
+import matplotlib.pyplot as plt
+import numpy as np
+
 from pysisyphus.calculators import ORCA5, XTB
 from pysisyphus.drivers.pka import direct_cycle, G_aq_from_h5_hessian
 from pysisyphus.helpers import geom_loader, do_final_hessian
@@ -292,7 +295,18 @@ class LFER_Correction(luigi.Task):
     yaml_inp = luigi.Parameter()
     
     def output(self):
-        return( luigi.LocalTarget(Path("output/LFER_summary.yaml")) )
+    
+        # Read the input file
+        with open(self.yaml_inp) as handle:
+            inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
+        # Get the file format for the output file of the LFER plot (image file extension) default to .png
+        imageOutputSuffix = inputDict.get("pyplot", {}).get("format", ".png")
+        # Add a leading . to the file extension if not existing.
+        if not imageOutputSuffix.startswith("."): "." + imageOutputSuffix
+        
+        # Return target files
+        return( luigi.LocalTarget(Path("output/LFER_summary.yaml")),
+                luigi.LocalTarget(Path("output/LFER_plot"+imageOutputSuffix), format=luigi.format.Nop) )
     
     def requires(self):
         with open(self.yaml_inp) as handle:
@@ -358,14 +372,63 @@ class LFER_Correction(luigi.Task):
                 }
             }
         
-        # 6. Create plot
-        # TODO: CREATE A PLOT OF THE LINEAR REGRESSION
-        
         print(f"@@@ LFER CORRECTION DONE\n{yaml.dump(summary)}")
-        with self.output().open("w") as handle:
+        with self.output()[0].open("w") as handle:
             yaml.dump(summary, handle)
-            
         
+        # 6. Create plot
+        print("PLOT LFER ...")
+        # Get user settings from input file. Return empty dictionary, if not given.
+        with open(self.yaml_inp) as handle:
+            inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
+            settings  = inputDict.get("pyplot", {})
+        
+        # Create an empty plot.
+        fig = plt.figure()
+        ax1 = fig.add_subplot(111)
+        
+        # Add title and labels
+        ax1.set_title(settings.get("title", "LFER"))
+        ax1.set_ylabel(settings.get("ylabel", r'experimental $\mathrm{p}K_a$'))
+        ax1.set_xlabel(settings.get("xlabel", r'calculated $\mathrm{p}K_a$'))
+        
+        # Add a grid
+        ax1.grid()
+
+        # Plot x-location of the target set
+        for index, x in enumerate(targetset["pKa_calc"]):
+            if index == 0: ax1.axvline(x, 0, 1, c="r", label=settings.get("targetLabel", "Targets"))
+            else:          ax1.axvline(x, 0, 1, c="r")
+
+        # Add regression line to plot
+        # Get the x coordinates of the regression line as the minimal and maximal x-cordinates of the training set
+        lineX = np.array([min(trainingset["pKa_calc"]), max(trainingset["pKa_calc"])])
+        # Predict the y coordinates of the linear regression with the x coordinates.
+        lineY = model().coef_ * lineX + model().intercept_
+        # Add a line to the plot
+        ax1.plot( lineX, lineY, c='b', label=settings.get("regressionLabel", "LFER") )
+        
+        # Plot training set and validation set
+        ax1.scatter(x="pKa_calc", y="pKa_exp", data=trainingset  , s=10, c='b', label=settings.get("trainingLabel", 'Training'))
+        ax1.scatter(x="pKa_calc", y="pKa_exp", data=validationset, s=10, c='g', label=settings.get("validationLabel", 'Validation'))
+        
+        # Add the legend
+        fig.legend(loc=settings.get("legendLoc", "upper right"))
+
+        # Create image file
+        # Save image to temporary file. Saving it later to the actual output, because pyplot I can't find a way to combine pyplot.savefig with luigi.LocalTarget
+        # Create the temporary file with the same suffix as the final output file.
+        imageTargetFile = self.output()[1]
+        tmpFile = tempfile.NamedTemporaryFile(suffix=Path(imageTargetFile.path).suffix)
+        # Save the image to the output file
+        fig.savefig(tmpFile.name)
+        # Read the image from file into a variable.
+        with open(tmpFile.name, "rb") as file:
+            image = file.read()
+        print("LFER PLOT DONE")
+        # Write the variable to the actual output file.
+        with imageTargetFile.open("w") as handle:
+            handle.write(image)
 
 class TaskScheduler(luigi.WrapperTask):
     yaml_inp = luigi.Parameter()
