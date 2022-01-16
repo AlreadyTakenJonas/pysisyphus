@@ -60,7 +60,7 @@ class InputGeometry(Params, luigi.Task):
 
     def requires(self):
         if self.is_base:
-            return Minimization(self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn, charge=charge)
+            return Minimization(self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn, charge=self.charge)
         else:
             return None
 
@@ -83,7 +83,7 @@ class PreMinimization(Params, luigi.Task):
         return luigi.LocalTarget(self.get_path("preopt.xyz"))
 
     def requires(self):
-        return InputGeometry(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=charge)
+        return InputGeometry(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=self.charge)
 
     def run(self):
         geom = geom_loader(self.input().path, coord_type="redund")
@@ -118,10 +118,10 @@ class Minimization(Params, luigi.Task):
         # Maybe some cycles could be saved when the base is also pre-
         # optimized, but things could also go wrong.
         if self.is_base:
-            return InputGeometry(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=charge)
+            return InputGeometry(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=self.charge)
         # Only preoptimize initial acid geometry, not the base.
         else:
-            return PreMinimization(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=charge)
+            return PreMinimization(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=self.charge)
 
     def run(self):
         geom = geom_loader(self.input().path, coord_type="redund")
@@ -190,7 +190,7 @@ class SolvEnergy(Params, luigi.Task):
         return luigi.LocalTarget(self.get_path("solv_energy"))
 
     def requires(self):
-        return Minimization(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=charge)
+        return Minimization(self.name, self.h_ind, self.is_base, acidset=self.acidset, fn=self.fn, charge=self.charge)
 
     def run(self):
         geom = geom_loader(self.input()[0].path)
@@ -208,10 +208,10 @@ class DirectCycle(Params, luigi.Task):
 
     def requires(self):
         return (
-            Minimization(self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn, charge=charge),
-            Minimization(self.name, self.h_ind, is_base=True, acidset=self.acidset, fn=self.fn, charge=charge),
-            SolvEnergy(self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn, charge=charge),
-            SolvEnergy(self.name, self.h_ind, is_base=True, acidset=self.acidset, fn=self.fn, charge=charge),
+            Minimization(self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn, charge=self.charge),
+            Minimization(self.name, self.h_ind, is_base=True, acidset=self.acidset, fn=self.fn, charge=self.charge),
+            SolvEnergy(self.name, self.h_ind, is_base=False, acidset=self.acidset, fn=self.fn, charge=self.charge),
+            SolvEnergy(self.name, self.h_ind, is_base=True, acidset=self.acidset, fn=self.fn, charge=self.charge),
         )
 
     def run(self):
