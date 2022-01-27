@@ -294,20 +294,42 @@ class DirectCycler(luigi.Task):
 class LFER_Correction(luigi.Task):
     yaml_inp = luigi.Parameter()
     
+    # List with names of the plot, that this task will generate.
+    LIST_OF_IMAGE_FILES = ["LFER"]
+    
+    # Helper function to get optional parameters (=settings) from the yaml file.
+    # Define funcion to get the settings either from a nested dictionary.
+    # The settings can be defined on the first layer of settings and these settings will be used for all plots.
+    # If there is a subdictionary with the name of the plot, the function returns the setting specific for that plot and not the global settings.
+    # If nothing is defined, return the default value.
+    def getPyplotSettingsHandler(yamlInput, plotname):
+        settings = yamlInput.get("pyplot", {})
+        def getSettings(key, default):
+            try:
+                return settings[plotname].get(key, default)
+            except KeyError:
+                return settings.get(key, default)
+        return getSettings
+    
     def output(self):
     
+        # Yield the summary target file
+        yield luigi.LocalTarget(Path("output/LFER_summary.yaml"))
+        
+        # YIELD IMAGE FILES
         # Read the input file
         with open(self.yaml_inp) as handle:
             inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
-        # Get the file format for the output file of the LFER plot (image file extension) default to .png
-        imageOutputSuffix = inputDict.get("pyplot", {}).get("format", ".png")
-        # Add a leading . to the file extension if not existing.
-        if not imageOutputSuffix.startswith("."): "." + imageOutputSuffix
+            
+        for name in self.LIST_OF_IMAGE_FILES:    
+            imageSettings = self.getPyplotSettingsHandler(inputDict, name)
+            # Get the file format for the output file of the plot (image file extension) default to .png
+            imageOutputSuffix = imageSettings("format", ".png")
+            # Add a leading . to the file extension if not existing.
+            if not imageOutputSuffix.startswith("."): "." + imageOutputSuffix
+            # Yield the image file with the correct suffix and name.
+            yield luigi.LocalTarget(Path(f"output/plot_{name}{imageOutputSuffix}", format=luigi.format.Nop))
         
-        # Return target files
-        return( luigi.LocalTarget(Path("output/LFER_summary.yaml")),
-                luigi.LocalTarget(Path("output/LFER_plot"+imageOutputSuffix), format=luigi.format.Nop) )
-    
     def requires(self):
         with open(self.yaml_inp) as handle:
             run_dict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
@@ -381,23 +403,40 @@ class LFER_Correction(luigi.Task):
         # Get user settings from input file. Return empty dictionary, if not given.
         with open(self.yaml_inp) as handle:
             inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
-            settings  = inputDict.get("pyplot", {})
+        
+        # Create image file
+        # Save image to temporary file. Saving it later to the actual output, because pyplot I can't find a way to combine pyplot.savefig with luigi.LocalTarget
+        # Create the temporary file with the same suffix as the final output file.
+        def saveFig(outputFile, figure):
+            # Get a temporary file to save the image initially to.
+            tmpFile = tempfile.NamedTemporaryFile(suffix=Path(outputFile.path).suffix)
+            # Save the image to the output file
+            figure.savefig(tmpFile.name)
+            # Read the image from file into a variable.
+            with open(tmpFile.name, "rb") as file:
+                image = file.read()
+            # Write the variable to the actual output file.
+            with outputFile.open("w") as handle:
+                handle.write(image)
+
+        # Get settings for the first plot             
+        getSettings = self.getPyplotSettingsHandler(inputDict, self.LIST_OF_IMAGE_FILES[0])
         
         # Create an empty plot.
         fig = plt.figure()
         ax1 = fig.add_subplot(111)
         
         # Add title and labels
-        ax1.set_title(settings.get("title", "LFER"))
-        ax1.set_ylabel(settings.get("ylabel", r'experimental $\mathrm{p}K_a$'))
-        ax1.set_xlabel(settings.get("xlabel", r'calculated $\mathrm{p}K_a$'))
+        ax1.set_title(getSettings("title", "LFER"))
+        ax1.set_ylabel(getSettings("ylabel", r'experimental $\mathrm{p}K_a$'))
+        ax1.set_xlabel(getSettings("xlabel", r'calculated $\mathrm{p}K_a$'))
         
         # Add a grid
         ax1.grid()
 
         # Plot x-location of the target set
         for index, x in enumerate(targetset["pKa_calc"]):
-            if index == 0: ax1.axvline(x, 0, 1, c="r", label=settings.get("targetLabel", "Targets"))
+            if index == 0: ax1.axvline(x, 0, 1, c="r", label=getSettings("targetLabel", "Targets"))
             else:          ax1.axvline(x, 0, 1, c="r")
 
         # Add regression line to plot
@@ -406,29 +445,18 @@ class LFER_Correction(luigi.Task):
         # Predict the y coordinates of the linear regression with the x coordinates.
         lineY = model().coef_ * lineX + model().intercept_
         # Add a line to the plot
-        ax1.plot( lineX, lineY, c='b', label=settings.get("regressionLabel", "LFER") )
+        ax1.plot( lineX, lineY, c='b', label=getSettings("regressionLabel", "LFER") )
         
         # Plot training set and validation set
-        ax1.scatter(x="pKa_calc", y="pKa_exp", data=trainingset  , s=10, c='b', label=settings.get("trainingLabel", 'Training'))
-        ax1.scatter(x="pKa_calc", y="pKa_exp", data=validationset, s=10, c='g', label=settings.get("validationLabel", 'Validation'))
+        ax1.scatter(x="pKa_calc", y="pKa_exp", data=trainingset  , s=10, c='b', label=getSettings("trainingLabel", 'Training'))
+        ax1.scatter(x="pKa_calc", y="pKa_exp", data=validationset, s=10, c='g', label=getSettings("validationLabel", 'Validation'))
         
         # Add the legend
-        fig.legend(loc=settings.get("legendLoc", "upper right"))
-
-        # Create image file
-        # Save image to temporary file. Saving it later to the actual output, because pyplot I can't find a way to combine pyplot.savefig with luigi.LocalTarget
-        # Create the temporary file with the same suffix as the final output file.
-        imageTargetFile = self.output()[1]
-        tmpFile = tempfile.NamedTemporaryFile(suffix=Path(imageTargetFile.path).suffix)
-        # Save the image to the output file
-        fig.savefig(tmpFile.name)
-        # Read the image from file into a variable.
-        with open(tmpFile.name, "rb") as file:
-            image = file.read()
+        fig.legend(loc=getSettings("legendLoc", "upper right"))
+        
+        # Save the figure to the output file.
+        saveFig(self.output()[1], fig)
         print("LFER PLOT DONE")
-        # Write the variable to the actual output file.
-        with imageTargetFile.open("w") as handle:
-            handle.write(image)
 
 class TaskScheduler(luigi.WrapperTask):
     yaml_inp = luigi.Parameter()
