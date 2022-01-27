@@ -241,7 +241,7 @@ class DirectCycle(Params, luigi.Task):
             "G_acid_aq": G_acid_aq,
             "G_base_aq": G_base_aq,
             "G_diss_aq": G_diss_aq,
-            "pKa_calc": pKa,
+            "pKa_calc": pKa
         }
         with self.output().open("w") as handle:
             yaml.dump(results, handle)
@@ -263,11 +263,15 @@ class DirectCycler(luigi.Task):
             fn = acid_dict["fn"]
             try:
                 charge = acid_dict["charge"]
-            except KeyError as e:
+            except KeyError:
                 charge = 0
             yield DirectCycle(name=name, h_ind=h_ind, acidset=self.acidset, fn=fn, charge=charge)
     
     def run(self):
+        # Get section with the acids from the input file
+        acids = yaml.safe_load(self.acidlist)
+        
+        # Organise the result of the DirectCylce Task
         res = {}
         for dc in self.input():
             with dc.open() as handle:
@@ -282,7 +286,8 @@ class DirectCycler(luigi.Task):
                     pka_exp = acidlist[name]["pks_exp"]
                 res[name] = {
                     "pKa_calc": pKa_calc,
-                    "pKa_exp": pka_exp
+                    "pKa_exp": pka_exp,
+                    "group": acids[name]["group"]
                     } 
             print("@@@", dc.path, pKa_calc)
         
@@ -295,40 +300,46 @@ class LFER_Correction(luigi.Task):
     yaml_inp = luigi.Parameter()
     
     # List with names of the plot, that this task will generate.
-    LIST_OF_IMAGE_FILES = ["LFER"]
+    LIST_OF_IMAGE_FILES = ["trainingsPlot", "LFER"]
     
     # Helper function to get optional parameters (=settings) from the yaml file.
     # Define funcion to get the settings either from a nested dictionary.
     # The settings can be defined on the first layer of settings and these settings will be used for all plots.
     # If there is a subdictionary with the name of the plot, the function returns the setting specific for that plot and not the global settings.
     # If nothing is defined, return the default value.
-    def getPyplotSettingsHandler(yamlInput, plotname):
-        settings = yamlInput.get("pyplot", {})
+    def getPyplotSettingsHandler(self, plotname):
+        # Read the input file
+        with open(self.yaml_inp) as handle:
+            inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
+        # Get the section about pyplot
+        settings = inputDict.get("pyplot", {})
+        # Define a function, that grabs the correct value.
         def getSettings(key, default):
             try:
+                # Try to access the section specific to the current plot
                 return settings[plotname].get(key, default)
             except KeyError:
+                # If this section does not exist, grab the setting from the top level
                 return settings.get(key, default)
         return getSettings
     
     def output(self):
-    
-        # Yield the summary target file
-        yield luigi.LocalTarget(Path("output/LFER_summary.yaml"))
         
-        # YIELD IMAGE FILES
-        # Read the input file
-        with open(self.yaml_inp) as handle:
-            inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
-            
+        # Define the summary file as target
+        targets = {"summaryFile": luigi.LocalTarget(Path("output/LFER_summary.yaml")) }
+        
+        # APPEND IMAGE FILES TO THE TARGET LIST
         for name in self.LIST_OF_IMAGE_FILES:    
-            imageSettings = self.getPyplotSettingsHandler(inputDict, name)
+            imageSettings = self.getPyplotSettingsHandler(name)
             # Get the file format for the output file of the plot (image file extension) default to .png
             imageOutputSuffix = imageSettings("format", ".png")
             # Add a leading . to the file extension if not existing.
             if not imageOutputSuffix.startswith("."): "." + imageOutputSuffix
-            # Yield the image file with the correct suffix and name.
-            yield luigi.LocalTarget(Path(f"output/plot_{name}{imageOutputSuffix}", format=luigi.format.Nop))
+            # Add the image file with the correct suffix and name to the targets.
+            targets.update({name: luigi.LocalTarget(Path(f"output/plot_{name}{imageOutputSuffix}"), format=luigi.format.Nop) })
+        
+        # Return the target list
+        return targets
         
     def requires(self):
         with open(self.yaml_inp) as handle:
@@ -356,13 +367,16 @@ class LFER_Correction(luigi.Task):
         trainingset = {
             "pKa_calc": [ acid["pKa_calc"] for acid in results["trainingset"].values() ],
             "pKa_exp" : [ acid["pKa_exp"]  for acid in results["trainingset"].values() ],
+            "group"   : [ acid["group"]    for acid in results["trainingset"].values() ],
             "name"    : list( results["trainingset"].keys() ) }
         validationset = {
             "pKa_calc": [ acid["pKa_calc"] for acid in results["validationset"].values() ],
             "pKa_exp" : [ acid["pKa_exp"]  for acid in results["validationset"].values() ],
+            "group"   : [ acid["group"]    for acid in results["validationset"].values() ],
             "name"    : list( results["validationset"].keys() ) }
         targetset = {
             "pKa_calc": [ acid["pKa_calc"] for acid in results["targetset"].values() ],
+            "group"   : [ acid["group"]    for acid in results["targetset"].values() ],
             "name"    : list( results["targetset"].keys() ) }
         
         # 2. Do LFER
@@ -395,14 +409,11 @@ class LFER_Correction(luigi.Task):
             }
         
         print(f"@@@ LFER CORRECTION DONE\n{yaml.dump(summary)}")
-        with self.output()[0].open("w") as handle:
+        with self.output()["summaryFile"].open("w") as handle:
             yaml.dump(summary, handle)
         
         # 6. Create plot
         print("PLOT LFER ...")
-        # Get user settings from input file. Return empty dictionary, if not given.
-        with open(self.yaml_inp) as handle:
-            inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
         
         # Create image file
         # Save image to temporary file. Saving it later to the actual output, because pyplot I can't find a way to combine pyplot.savefig with luigi.LocalTarget
@@ -418,46 +429,42 @@ class LFER_Correction(luigi.Task):
             # Write the variable to the actual output file.
             with outputFile.open("w") as handle:
                 handle.write(image)
-
+        
+        #
+        #   CREATE FIRST PLOT: TRAININGSET PLOT
+        #
         # Get settings for the first plot             
-        getSettings = self.getPyplotSettingsHandler(inputDict, self.LIST_OF_IMAGE_FILES[0])
+        getSettings = self.getPyplotSettingsHandler(self.LIST_OF_IMAGE_FILES[0])
         
         # Create an empty plot.
         fig = plt.figure()
-        ax1 = fig.add_subplot(111)
+        ax1 = fig.add_subplot(111, aspect='equal')
         
         # Add title and labels
-        ax1.set_title(getSettings("title", "LFER"))
-        ax1.set_ylabel(getSettings("ylabel", r'experimental $\mathrm{p}K_a$'))
-        ax1.set_xlabel(getSettings("xlabel", r'calculated $\mathrm{p}K_a$'))
+        ax1.set_title(getSettings("title", "Trainingsset"))
+        ax1.set_xlabel(getSettings("xlabel", r'experimental $\mathrm{p}K_a$'))
+        ax1.set_ylabel(getSettings("ylabel", r'calculated $\mathrm{p}K_a$'))
         
         # Add a grid
         ax1.grid()
-
-        # Plot x-location of the target set
-        for index, x in enumerate(targetset["pKa_calc"]):
-            if index == 0: ax1.axvline(x, 0, 1, c="r", label=getSettings("targetLabel", "Targets"))
-            else:          ax1.axvline(x, 0, 1, c="r")
-
-        # Add regression line to plot
-        # Get the x coordinates of the regression line as the minimal and maximal x-cordinates of the training set
-        lineX = np.array([min(trainingset["pKa_calc"]), max(trainingset["pKa_calc"])])
-        # Predict the y coordinates of the linear regression with the x coordinates.
-        lineY = model().coef_ * lineX + model().intercept_
-        # Add a line to the plot
-        ax1.plot( lineX, lineY, c='b', label=getSettings("regressionLabel", "LFER") )
         
-        # Plot training set and validation set
-        ax1.scatter(x="pKa_calc", y="pKa_exp", data=trainingset  , s=10, c='b', label=getSettings("trainingLabel", 'Training'))
-        ax1.scatter(x="pKa_calc", y="pKa_exp", data=validationset, s=10, c='g', label=getSettings("validationLabel", 'Validation'))
+        # Add diagonal line
+        ax1.plot(trainingset["pKa_exp"], trainingset["pKa_exp"], c='r', label=r"$f(x)=x$")
+        
+        # Plot training set
+        groups = list(set(trainingset["group"]))
+        for group in groups:
+            x = [ x for index, x in enumerate(trainingset["pKa_exp"]) if trainingset["group"][index] == group ]
+            y = [ y for index, y in enumerate(trainingset["pKa_calc"]) if trainingset["group"][index] == group ]
+            ax1.scatter(x=x, y=y, s=10, label=group)
         
         # Add the legend
         fig.legend(loc=getSettings("legendLoc", "upper right"))
         
         # Save the figure to the output file.
-        saveFig(self.output()[1], fig)
-        print("LFER PLOT DONE")
-
+        saveFig(self.output()["trainingsPlot"], fig)
+        print("TRAININGS PLOT DONE")
+        
 class TaskScheduler(luigi.WrapperTask):
     yaml_inp = luigi.Parameter()
     
