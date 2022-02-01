@@ -21,6 +21,9 @@ from pysisyphus.optimizers.RFOptimizer import RFOptimizer
 
 import pysisyphus.LinearFreeEnergyRelation as LFER
 
+# Name of the subfolder where the output files will be saved.
+OUTPUTDIR = Path("output")
+
 class Params(luigi.Config):
     name = luigi.Parameter()
     h_ind = luigi.IntParameter()
@@ -32,7 +35,7 @@ class Params(luigi.Config):
 
     @property
     def out_dir(self):
-        return Path(f"output/{self.base}_{self.name}")
+        return OUTPUTDIR / f"{self.base}_{self.name}"
 
     def get_path(self, fn):
         out_dir = self.out_dir
@@ -252,7 +255,7 @@ class DirectCycler(luigi.Task):
     acidset = luigi.Parameter()
     
     def output(self):
-        return luigi.LocalTarget(Path(f"output/{self.acidset}_summary.yaml"))
+        return luigi.LocalTarget(OUTPUTDIR/f"{self.acidset}_summary.yaml")
     
     def requires(self):
         acids = yaml.safe_load(self.acidlist)
@@ -326,7 +329,7 @@ class LFER_Correction(luigi.Task):
     def output(self):
         
         # Define the summary file as target
-        targets = {"summaryFile": luigi.LocalTarget(Path("output/LFER_summary.yaml")) }
+        targets = {"summaryFile": luigi.LocalTarget(OUTPUTDIR/"LFER_summary.yaml") }
         
         # APPEND IMAGE FILES TO THE TARGET LIST
         for name in self.LIST_OF_IMAGE_FILES:    
@@ -336,7 +339,7 @@ class LFER_Correction(luigi.Task):
             # Add a leading . to the file extension if not existing.
             if not imageOutputSuffix.startswith("."): "." + imageOutputSuffix
             # Add the image file with the correct suffix and name to the targets.
-            targets.update({name: luigi.LocalTarget(Path(f"output/plot_{name}{imageOutputSuffix}"), format=luigi.format.Nop) })
+            targets.update({name: luigi.LocalTarget(OUTPUTDIR/f"plot_{name}{imageOutputSuffix}", format=luigi.format.Nop) })
         
         # Return the target list
         return targets
@@ -694,6 +697,9 @@ def run():
 
     def get_xtb_calc(charge, out_dir):
         return XTB(pal=pal, charge=charge, out_dir=out_dir, base_name="xtb")
+    
+    # Create the directory for the output files. Ignore this command, if the directory already exists.
+    OUTPUTDIR.mkdir(parents=True, exist_ok=True)
 
     luigi.build(
         (TaskScheduler(args.yaml), ),
