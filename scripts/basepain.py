@@ -572,7 +572,7 @@ class LFER_Correction(luigi.Task):
         print("VALIDATION PLOT DONE")
         
         #
-        #   CREATE FOURTH PLOT: SUMMARY
+        #   CREATE FOURTH PLOT: OVERVIEW
         #
         # Get settings for the first plot
         plotName = self.LIST_OF_IMAGE_FILES[3]
@@ -597,7 +597,8 @@ class LFER_Correction(luigi.Task):
         ax1.set_yticks(np.arange(*commonLimits, 2))
         
         # Add diagonal line
-        ax1.plot([min(commonAxis)]*2, [max(commonAxis)]*2, c='r', label=r"$f(x)=x$")
+        diag_x = sorted( validationset["pKa_exp"] + trainingset["pKa_exp"] )
+        ax1.plot(diag_x, diag_x, c='r', label=r"$f(x)=x$")
         
         # Plot validation and training set
         groups = list(set(validationset["group"]+trainingset["group"]))
