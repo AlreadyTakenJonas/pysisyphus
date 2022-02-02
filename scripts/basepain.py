@@ -41,8 +41,7 @@ class Params(luigi.Config):
         out_dir = self.out_dir
         is_base_str = "_base" if self.is_base else ""
         fn = f"{self.name}{is_base_str}_{fn}"
-        if not out_dir.exists():
-            os.mkdir(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / fn
 
     def backup_from_dir(self, dir_, fn, dest_fn=None):
@@ -699,9 +698,6 @@ def run():
     def get_xtb_calc(charge, out_dir):
         return XTB(pal=pal, charge=charge, out_dir=out_dir, base_name="xtb")
     
-    # Create the directory for the output files. Ignore this command, if the directory already exists.
-    OUTPUTDIR.mkdir(parents=True, exist_ok=True)
-
     luigi.build(
         (TaskScheduler(args.yaml), ),
         local_scheduler=True,
