@@ -38,8 +38,8 @@ def plot_training(csvFile, settings={}):
     # Set equal axis ticks
     commonAxis = trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
     commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-    ax.set_xticks(np.arange(*commonLimits, 2))
-    ax.set_yticks(np.arange(*commonLimits, 2))
+    ax.set_xticks(np.arange( *commonLimits, settings.get("xtick_spacing", 2) ))
+    ax.set_yticks(np.arange( *commonLimits, settings.get("ytick_spacing", 2) ))
     
     # Add diagonal line
     ax.plot(trainingset["pKa_exp"], trainingset["pKa_exp"], c='r', label=r"$f(x)=x$")
@@ -78,8 +78,8 @@ def plot_LFER(csvFile, settings={}):
     # Set equal axis ticks
     commonAxis = trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
     commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-    ax.set_xticks(np.arange(*commonLimits, 2))
-    ax.set_yticks(np.arange(*commonLimits, 2))
+    ax.set_xticks(np.arange( *commonLimits, settings.get("xtick_spacing", 2) ))
+    ax.set_yticks(np.arange( *commonLimits, settings.get("ytick_spacing", 2) ))
     
     
     # Add diagonal line
@@ -122,8 +122,8 @@ def plot_validation(csvFile, settings={}):
     # Set equal axis ticks
     commonAxis = validationset["pKa_calc"].tolist() + validationset["pKa_exp"].tolist()
     commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-    ax.set_xticks(np.arange(*commonLimits, 2))
-    ax.set_yticks(np.arange(*commonLimits, 2))
+    ax.set_xticks(np.arange( *commonLimits, settings.get("xtick_spacing", 2) ))
+    ax.set_yticks(np.arange( *commonLimits, settings.get("ytick_spacing", 2) ))
     
     
     # Add diagonal line
@@ -166,8 +166,8 @@ def plot_overview(csvFile, settings={}):
     # Set equal axis ticks
     commonAxis = validationset["pKa_calc"].tolist() + validationset["pKa_exp"].tolist() + trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
     commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-    ax.set_xticks(np.arange(*commonLimits, 2))
-    ax.set_yticks(np.arange(*commonLimits, 2))
+    ax.set_xticks(np.arange( *commonLimits, settings.get("xtick_spacing", 2) ))
+    ax.set_yticks(np.arange( *commonLimits, settings.get("ytick_spacing", 2) ))
     
     # Add diagonal line
     points = data.loc[ data.set.isin(["training", "validation"]) ]
