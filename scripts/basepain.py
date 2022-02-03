@@ -370,6 +370,9 @@ class LFER_Correction(luigi.Task):
         # Compute the square error of the LFER for all molecules
         summaryDF["square_error"] = (summaryDF.pKa_calc - summaryDF.pKa_corr)**2
         
+        # Reorganise columns
+        summaryDF = summaryDF[["name", "group", "set", "pKa_exp", "pKa_calc", "pKa_corr", "square_error", "source"]]
+        
         # Write the data frame to file
         with self.output()["csv"].open("w") as handle:
             handle.write(summaryDF.to_csv())
