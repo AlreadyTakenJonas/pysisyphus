@@ -368,7 +368,7 @@ class LFER_Correction(luigi.Task):
         # Predict the pKa with the LFER for all molecules
         summaryDF["pKa_corr"]     = model.predict( summaryDF.pKa_calc.values.reshape((-1,1)) )
         # Compute the square error of the LFER for all molecules
-        summaryDF["square_error"] = (summaryDF.pKa_calc - summaryDF.pKa_corr)**2
+        summaryDF["square_error"] = (summaryDF.pKa_exp - summaryDF.pKa_corr)**2
         
         # Reorganise columns
         summaryDF = summaryDF[["name", "group", "set", "pKa_exp", "pKa_calc", "pKa_corr", "square_error", "source"]]
