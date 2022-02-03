@@ -44,6 +44,7 @@ setup(
         "sympy",
         "scikit-learn",
         "pandas",
+        "tabulate",
     ],
     # Install locally with
     #   pip install -e .[extra]

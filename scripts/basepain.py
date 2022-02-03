@@ -301,7 +301,8 @@ class LFER_Correction(luigi.Task):
     
     def output(self):
         return { "yaml": luigi.LocalTarget(OUTPUTDIR/"LFER_summary.yaml"),
-                 "csv" : luigi.LocalTarget(OUTPUTDIR/"LFER_summary.csv")   }
+                 "csv" : luigi.LocalTarget(OUTPUTDIR/"LFER_summary.csv"),
+                 "md"  : luigi.LocalTarget(OUTPUTDIR/"LFER_summary.md")}
         
     def requires(self):
         with open(self.yaml_inp) as handle:
@@ -372,6 +373,8 @@ class LFER_Correction(luigi.Task):
         # Write the data frame to file
         with self.output()["csv"].open("w") as handle:
             handle.write(summaryDF.to_csv())
+        with self.output()["md"].open("w") as handle:
+            handle.write(summaryDF.to_markdown())
         
         # Create yaml summary with information on LFER
         summaryYAML = {
