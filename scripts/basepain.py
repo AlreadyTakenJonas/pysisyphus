@@ -11,7 +11,6 @@ import luigi
 import psutil
 import yaml
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -21,6 +20,8 @@ from pysisyphus.calculators import ORCA5, XTB
 from pysisyphus.drivers.pka import direct_cycle, G_aq_from_h5_hessian
 from pysisyphus.helpers import geom_loader, do_final_hessian
 from pysisyphus.optimizers.RFOptimizer import RFOptimizer
+
+import basepain_plotter
 
 # Name of the subfolder where the output files will be saved.
 OUTPUTDIR = Path("output")
@@ -444,204 +445,31 @@ class LFER_Plotting(luigi.Task):
             with outputFile.open("w") as handle:
                 handle.write(image)
         
-        #
-        #   CREATE FIRST PLOT: TRAININGSET PLOT
-        #
-        def plot_training(csvFile, settings):
-            # Read output file of last job
-            data = pd.read_csv(csvFile)
-            # Get the training set
-            trainingset = data.loc[ data.set == "training" ]
-            
-            # Create an empty plot.
-            fig = plt.figure()
-            ax = fig.add_subplot(111)
-            
-            # Add title and labels
-            ax.set_title(settings.get("title", "Training Set"))
-            ax.set_xlabel(settings.get("xlabel", r'experimental $\mathrm{p}K_a$'))
-            ax.set_ylabel(settings.get("ylabel", r'calculated $\mathrm{p}K_a$'))
-            
-            # Add a grid
-            ax.grid()
-            
-            # Set equal axis ticks
-            commonAxis = trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
-            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-            ax.set_xticks(np.arange(*commonLimits, 2))
-            ax.set_yticks(np.arange(*commonLimits, 2))
-            
-            # Add diagonal line
-            ax.plot(trainingset["pKa_exp"], trainingset["pKa_exp"], c='r', label=r"$f(x)=x$")
-            
-            # Plot training set
-            for group in trainingset.group.unique():
-                points = trainingset.loc[ trainingset.group == group ]
-                ax.scatter(x=points.pKa_exp, y=points.pKa_calc, s=10, label=group)
-            
-            # Add the legend
-            fig.legend(loc=settings.get("legendLoc", "upper left"))
-            
-            return fig
-        
         # Create plot
-        fig = plot_training( csvFile = self.input()["csv"].path, 
-                             settings = settings_dict.get("globalSettings", {}) | settings_dict.get("training", {}) )
+        fig = basepain_plotter.plot_training( csvFile = self.input()["csv"].path, 
+                                              settings = settings_dict.get("globalSettings", {}) | settings_dict.get("training", {}) )
         # Save the figure to the output file.
         saveFig(self.output()["training"], fig)
         print("TRAININGS PLOT DONE")
-        
-        #
-        #   CREATE SECOND PLOT: LFER
-        #
-        def plot_LFER(csvFile, settings):
-            # Read output file of last job
-            data = pd.read_csv(csvFile)
-            # Get the training set
-            trainingset = data.loc[ data.set == "training" ]
-        
-            # Create an empty plot.
-            fig = plt.figure()
-            ax = fig.add_subplot(111)
-            
-            # Add title and labels
-            ax.set_title(settings.get("title", "LFER"))
-            ax.set_ylabel(settings.get("ylabel", r'experimental $\mathrm{p}K_a$'))
-            ax.set_xlabel(settings.get("xlabel", r'calculated $\mathrm{p}K_a$'))
-            
-            # Add a grid
-            ax.grid()
-            
-            # Set equal axis ticks
-            commonAxis = trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
-            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-            ax.set_xticks(np.arange(*commonLimits, 2))
-            ax.set_yticks(np.arange(*commonLimits, 2))
-            
-            
-            # Add diagonal line
-            ax.plot(trainingset["pKa_calc"], trainingset["pKa_calc"], c='r', label=r"$f(x)=x$")
-            
-            # Add regression line to plot
-            ax.plot( trainingset.pKa_calc, trainingset.pKa_corr, c='g', label=settings.get("regressionLabel", "LFER") )
-            
-            # Plot training set
-            for group in trainingset.group.unique():
-                points = trainingset.loc[trainingset.group == group]
-                ax.scatter(x=points.pKa_calc, y=points.pKa_exp, s=10, label=group)
-            
-            # Add the legend
-            fig.legend(loc=settings.get("legendLoc", "upper left"))
-            
-            return fig
+
         
         # Create plot
-        fig = plot_LFER( csvFile = self.input()["csv"].path, 
-                         settings = settings_dict.get("globalSettings", {}) | settings_dict.get("LFER", {}) )
+        fig = basepain_plotter.plot_LFER( csvFile = self.input()["csv"].path, 
+                                          settings = settings_dict.get("globalSettings", {}) | settings_dict.get("LFER", {}) )
         # Save the figure to the output file.
         saveFig(self.output()["LFER"], fig)
         print("LFER PLOT DONE")
-        
-        #
-        #   CREATE THIRD PLOT: VALIDATION SET
-        #
-        def plot_validation(csvFile, settings):
-            # Read output file of last job
-            data = pd.read_csv(csvFile)
-            # Get the validation set
-            validationset = data.loc[ data.set == "validation" ]
-            
-            # Create an empty plot.
-            fig = plt.figure()
-            ax = fig.add_subplot(111)
-            
-            # Add title and labels
-            ax.set_title(settings.get("title", "Validation Set"))
-            ax.set_xlabel(settings.get("xlabel", r'experimental $\mathrm{p}K_a$'))
-            ax.set_ylabel(settings.get("ylabel", r'calculated & LFER-corrected $\mathrm{p}K_a$'))
-            
-            # Add a grid
-            ax.grid()
-            
-            # Set equal axis ticks
-            commonAxis = validationset["pKa_calc"].tolist() + validationset["pKa_exp"].tolist()
-            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-            ax.set_xticks(np.arange(*commonLimits, 2))
-            ax.set_yticks(np.arange(*commonLimits, 2))
-            
-            
-            # Add diagonal line
-            ax.plot(validationset["pKa_exp"], validationset["pKa_exp"], c='r', label=r"$f(x)=x$")
-            
-            # Plot validation set
-            # corrected theoretical pKa against experimental pKa
-            for group in validationset.group.unique():
-                points = validationset.loc[ validationset.group == group ]
-                ax.scatter(x=points.pKa_exp, y=points.pKa_corr, s=10, label=group)
-            
-            # Add the legend
-            fig.legend(loc=settings.get("legendLoc", "upper left"))
-            
-            return fig
-        
+         
         # Create plot
-        fig = plot_validation( csvFile = self.input()["csv"].path, 
-                              settings = settings_dict.get("globalSettings", {}) | settings_dict.get("validation", {}) )
+        fig = basepain_plotter.plot_validation( csvFile = self.input()["csv"].path, 
+                                                settings = settings_dict.get("globalSettings", {}) | settings_dict.get("validation", {}) )
         # Save the figure to the output file.
         saveFig(self.output()["validation"], fig)
         print("VALIDATION PLOT DONE")
         
-        #
-        #   CREATE FOURTH PLOT: OVERVIEW
-        #
-        def plot_overview(csvFile, settings):
-            # Read output file of last job
-            data = pd.read_csv(csvFile)
-            # Get the validation set
-            validationset = data.loc[ data.set == "validation" ]
-            # Get the training set
-            trainingset = data.loc[ data.set == "training" ]
-            
-            # Create an empty plot.
-            fig = plt.figure()
-            ax = fig.add_subplot(111)
-            
-            # Add title and labels
-            ax.set_title(settings.get("title", "Data Set Overview"))
-            ax.set_xlabel(settings.get("xlabel", r'experimental $\mathrm{p}K_a$'))
-            ax.set_ylabel(settings.get("ylabel", r'calculated $\mathrm{p}K_a$'))
-            
-            # Add a grid
-            ax.grid()
-            
-            # Set equal axis ticks
-            commonAxis = validationset["pKa_calc"].tolist() + validationset["pKa_exp"].tolist() + trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
-            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-            ax.set_xticks(np.arange(*commonLimits, 2))
-            ax.set_yticks(np.arange(*commonLimits, 2))
-            
-            # Add diagonal line
-            points = data.loc[ data.set.isin(["training", "validation"]) ]
-            ax.plot(points.pKa_exp, points.pKa_exp, c='r', label=r"$f(x)=x$")
-            
-            # Plot validation and training set
-            for group in pd.concat([validationset.group, trainingset.group]).unique():
-                color = next(ax._get_lines.prop_cycler)['color']
-                # Plot the validation set
-                points = validationset.loc[ validationset.group == group ]
-                ax.scatter(x=points.pKa_exp, y=points.pKa_calc, s=10, c=color, label=group+" (v)", marker="^")
-                # Plot the training set
-                points = trainingset.loc[ trainingset.group == group ]
-                ax.scatter(x=points.pKa_exp, y=points.pKa_calc, s=10, c=color, label=group+" (t)", marker="D")
-                
-            # Add the legend
-            fig.legend(loc=settings.get("legendLoc", "upper left"))
-            
-            return fig
-        
         # Create plot
-        fig = plot_overview( csvFile = self.input()["csv"].path, 
-                             settings = settings_dict.get("globalSettings", {}) | settings_dict.get("overview", {}) )
+        fig = basepain_plotter.plot_overview( csvFile = self.input()["csv"].path, 
+                                              settings = settings_dict.get("globalSettings", {}) | settings_dict.get("overview", {}) )
         # Save the figure to the output file.
         saveFig(self.output()["overview"], fig)
         print("OVERVIEW PLOT DONE")
