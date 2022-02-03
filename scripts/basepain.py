@@ -13,13 +13,14 @@ import yaml
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+
+from sklearn.linear_model import LinearRegression 
 
 from pysisyphus.calculators import ORCA5, XTB
 from pysisyphus.drivers.pka import direct_cycle, G_aq_from_h5_hessian
 from pysisyphus.helpers import geom_loader, do_final_hessian
 from pysisyphus.optimizers.RFOptimizer import RFOptimizer
-
-import pysisyphus.LinearFreeEnergyRelation as LFER
 
 # Name of the subfolder where the output files will be saved.
 OUTPUTDIR = Path("output")
@@ -269,10 +270,7 @@ class DirectCycler(luigi.Task):
                 charge = 0
             yield DirectCycle(name=name, h_ind=h_ind, acidset=self.acidset, fn=fn, charge=charge)
     
-    def run(self):
-        # Get section with the acids from the input file
-        acids = yaml.safe_load(self.acidlist)
-        
+    def run(self):        
         # Organise the result of the DirectCylce Task
         res = {}
         for dc in self.input():
@@ -288,8 +286,7 @@ class DirectCycler(luigi.Task):
                     pka_exp = acidlist[name]["pks_exp"]
                 res[name] = {
                     "pKa_calc": pKa_calc,
-                    "pKa_exp": pka_exp,
-                    "group": acids[name]["group"]
+                    "pKa_exp": pka_exp
                     } 
             print("@@@", dc.path, pKa_calc)
         
@@ -301,51 +298,13 @@ class DirectCycler(luigi.Task):
 class LFER_Correction(luigi.Task):
     yaml_inp = luigi.Parameter()
     
-    # List with names of the plot, that this task will generate.
-    LIST_OF_IMAGE_FILES = ["training", "LFER", "validation", "overview"]
-    
-    # Helper function to get optional parameters (=settings) from the yaml file.
-    # Define funcion to get the settings either from a nested dictionary.
-    # The settings can be defined on the first layer of settings and these settings will be used for all plots.
-    # If there is a subdictionary with the name of the plot, the function returns the setting specific for that plot and not the global settings.
-    # If nothing is defined, return the default value.
-    def getPyplotSettingsHandler(self, plotname):
-        # Read the input file
-        with open(self.yaml_inp) as handle:
-            inputDict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
-        # Get the section about pyplot
-        settings = inputDict.get("pyplot", {})
-        # Define a function, that grabs the correct value.
-        def getSettings(key, default):
-            try:
-                # Try to access the section specific to the current plot
-                return settings[plotname].get(key, default)
-            except KeyError:
-                # If this section does not exist, grab the setting from the top level
-                return settings.get(key, default)
-        return getSettings
-    
     def output(self):
-        
-        # Define the summary file as target
-        targets = {"summaryFile": luigi.LocalTarget(OUTPUTDIR/"LFER_summary.yaml") }
-        
-        # APPEND IMAGE FILES TO THE TARGET LIST
-        for name in self.LIST_OF_IMAGE_FILES:    
-            imageSettings = self.getPyplotSettingsHandler(name)
-            # Get the file format for the output file of the plot (image file extension) default to .png
-            imageOutputSuffix = imageSettings("format", ".png")
-            # Add a leading . to the file extension if not existing.
-            if not imageOutputSuffix.startswith("."): "." + imageOutputSuffix
-            # Add the image file with the correct suffix and name to the targets.
-            targets.update({name: luigi.LocalTarget(OUTPUTDIR/f"plot_{name}{imageOutputSuffix}", format=luigi.format.Nop) })
-        
-        # Return the target list
-        return targets
+        return { "yaml": luigi.LocalTarget(OUTPUTDIR/"LFER_summary.yaml"),
+                 "csv" : luigi.LocalTarget(OUTPUTDIR/"LFER_summary.csv")   }
         
     def requires(self):
         with open(self.yaml_inp) as handle:
-            run_dict = yaml.load(handle.read(), Loader=yaml.SafeLoader)
+            run_dict = yaml.safe_load(handle.read())
         
         # Dump the dictionaries into text, so they can be saved in a luigi parameter.
         trainingset   = yaml.dump(run_dict["trainingset"])
@@ -363,58 +322,111 @@ class LFER_Correction(luigi.Task):
                 res = yaml.load(handle, Loader=yaml.SafeLoader)
                 print(yaml.dump(res))
             results = results | res
+            
+        with open(self.yaml_inp) as handle:
+            run_dict = yaml.safe_load(handle.read())
         
         # DO LFER, validation and correct the target molecules pKa-values
-        # 1. Reformat the input data from the previous task
+        # 1. Reformat the input data from the previous task and create pandas data frames
         trainingset = {
-            "pKa_calc": [ acid["pKa_calc"] for acid in results["trainingset"].values() ],
-            "pKa_exp" : [ acid["pKa_exp"]  for acid in results["trainingset"].values() ],
-            "group"   : [ acid["group"]    for acid in results["trainingset"].values() ],
-            "name"    : list( results["trainingset"].keys() ) }
-        validationset = {
-            "pKa_calc": [ acid["pKa_calc"] for acid in results["validationset"].values() ],
-            "pKa_exp" : [ acid["pKa_exp"]  for acid in results["validationset"].values() ],
-            "group"   : [ acid["group"]    for acid in results["validationset"].values() ],
-            "name"    : list( results["validationset"].keys() ) }
-        targetset = {
-            "pKa_calc": [ acid["pKa_calc"] for acid in results["targetset"].values() ],
-            "group"   : [ acid["group"]    for acid in results["targetset"].values() ],
-            "name"    : list( results["targetset"].keys() ) }
-        
-        # 2. Do LFER
-        # Pass the data to the LFER-model
-        # This call also fits the trainingsset with a linear model
-        model = LFER.Regression(trainingset, validationset, targetset,
-                                xlabel="pKa_calc", ylabel="pKa_exp", namelabel="name")
-        
-        # 3. Do validation
-        mean_square_error, square_errors, validation_prediction = model.validate()
-        
-        # 4. Apply LFER-correction to target molecules
-        pka_corrected = model.lfer_correction()
-        
-        # 5. Add more information so it can be dumped to file later
-        # Add mean_square_error to the pka_corrected dictionary
-        summary = {
-            "acids": pka_corrected,
-            "info": {
-                "lfer": {
-                    "intercept": float(model().intercept_),
-                    "slope": float(model().coef_) 
-                    },
-                "validation": {
-                    "mean_square_error": mean_square_error,
-                    "square_errors": square_errors,
-                    "acids": validation_prediction
-                    }
-                }
+            "pKa_calc": [ acid["pKa_calc"]                      for acid in results["trainingset"].values() ],
+            "pKa_exp" : [ acid["pKa_exp"]                       for acid in results["trainingset"].values() ],
+            "name"    : list( results["trainingset"].keys() ),
+            "group"   : [ run_dict["trainingset"][acid]["group"]  for acid in results["trainingset"].keys() ],
+            "set"     : [ "training"                              for _    in results["trainingset"].keys() ],
+            "source"  : [ run_dict["trainingset"][acid].get("source", None) for acid in results["trainingset"].keys() ]
             }
+        validationset = {
+            "pKa_calc": [ acid["pKa_calc"]                          for acid in results["validationset"].values() ],
+            "pKa_exp" : [ acid["pKa_exp"]                           for acid in results["validationset"].values() ],
+            "name"    : list( results["validationset"].keys() ),
+            "group"   : [ run_dict["validationset"][acid]["group"]  for acid in results["validationset"].keys()   ],
+            "set"     : [ "validation"                              for _    in results["validationset"].keys()   ],
+            "source"  : [ run_dict["validationset"][acid].get("source", None) for acid in results["validationset"].keys() ]
+            }
+        targetset = {
+            "pKa_calc": [ acid["pKa_calc"]                        for acid in results["targetset"].values() ],
+            "pKa_exp" : [ None                                    for _    in results["targetset"].keys()   ],
+            "name"    : list( results["targetset"].keys() ),
+            "group"   : [ run_dict["targetacids"][acid]["group"]  for acid in results["targetset"].keys()   ],
+            "set"     : [ "target"                                for _    in results["targetset"].keys()   ],
+            "source"  : [ run_dict["targetacids"][acid].get("source", None) for acid in results["targetset"].keys() ]            
+            }
+        #   Create a pandas data frame with information about all subsets and save it as csv
+        trainingDF   = pd.DataFrame(data=trainingset)
+        validationDF = pd.DataFrame(data=validationset)
+        targetDF     = pd.DataFrame(data=targetset)
+        # Combine all sets into one table
+        summaryDF    = pd.concat([trainingDF, validationDF, targetDF], ignore_index=True)
         
-        print(f"@@@ LFER CORRECTION DONE\n{yaml.dump(summary)}")
-        with self.output()["summaryFile"].open("w") as handle:
-            yaml.dump(summary, handle)
+        # 2. Do linear regression
+        model = LinearRegression()
+        model.fit( trainingDF.pKa_calc.values.reshape((-1,1)), trainingDF.pKa_exp )
         
-        # 6. Create plot
+        # Predict the pKa with the LFER for all molecules
+        summaryDF["pKa_corr"]     = model.predict( summaryDF.pKa_calc.values.reshape((-1,1)) )
+        # Compute the square error of the LFER for all molecules
+        summaryDF["square_error"] = (summaryDF.pKa_calc - summaryDF.pKa_corr)**2
+        
+        # Write the data frame to file
+        with self.output()["csv"].open("w") as handle:
+            handle.write(summaryDF.to_csv())
+        
+        # Create yaml summary with information on LFER
+        summaryYAML = {
+            "acids":
+                # List the target molecules with their corrected pKa values
+                { acid[0]: acid[1] for acid in summaryDF.loc[summaryDF.set == "target"][["name", "pKa_corr"]].values.tolist() },
+            "lfer": {
+                # Parameter linear regression
+                "intercept": float(model.intercept_),
+                "slope": float(model.coef_),
+                # Mean square error of validation set
+                "mean_square_error": float( np.mean( summaryDF.loc[ summaryDF.set == "validation" ].square_error ) ),
+                # Single square errors of validation set. List molecule by name with its square error
+                "square_errors": { acid[0]: acid[1] for acid in summaryDF.loc[summaryDF.set == "validation"][["name", "square_error"]].values.tolist() }
+            }
+        }
+        
+        print(f"@@@ LFER CORRECTION DONE\n{yaml.dump(summaryYAML)}")
+        # Output summary to file
+        with self.output()["yaml"].open("w") as handle:
+            yaml.dump(summaryYAML, handle)
+        
+        
+        
+class LFER_Plotting(luigi.Task):
+    yaml_inp = luigi.Parameter()
+    
+    def output(self):
+        
+        # Read the input file and get the section "pyplot". Might contain information on image format.
+        with open(self.yaml_inp) as handle:
+            plotSettings = yaml.safe_load(handle.read()).get("pyplot", {})
+        
+        # Define a function to get the image file suffix from the input file
+        def suffix(plotName):    
+            # Get the suffix from the plot specific section, the global section or use the default value.
+            suffix = ( plotSettings.get("globalSettings", {}) | plotSettings.get(plotName, {}) ).get("format", ".png")
+            # Add missing dots at the start
+            if not suffix.startswith("."): suffix = "." + suffix
+            
+            return suffix
+        
+        # Create a list with output files.
+        # Set format to Nop, so basepain can write binary to the luigi output file.
+        plots = ["training", "LFER", "validation", "overview"]
+        return { plot: luigi.LocalTarget(OUTPUTDIR/f"plot_{plot}{suffix(plot)}", format=luigi.format.Nop) for plot in plots }
+        
+    def requires(self):
+        return LFER_Correction(self.yaml_inp)
+
+    def run(self):
+        # 1. Read the input file and get the section "pyplot". Might contain information on formatting the plots.
+        with open(self.yaml_inp) as handle:
+            settings_dict = yaml.safe_load(handle.read()).get("pyplot", {})
+            
+        # 2. Create plots
         print("PLOT LFER ...")
         
         # Create image file
@@ -435,189 +447,204 @@ class LFER_Correction(luigi.Task):
         #
         #   CREATE FIRST PLOT: TRAININGSET PLOT
         #
-        plotName = self.LIST_OF_IMAGE_FILES[0]
-        # Get settings for the first plot             
-        getSettings = self.getPyplotSettingsHandler(plotName)
+        def plot_training(csvFile, settings):
+            # Read output file of last job
+            data = pd.read_csv(csvFile)
+            # Get the training set
+            trainingset = data.loc[ data.set == "training" ]
+            
+            # Create an empty plot.
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            
+            # Add title and labels
+            ax.set_title(settings.get("title", "Training Set"))
+            ax.set_xlabel(settings.get("xlabel", r'experimental $\mathrm{p}K_a$'))
+            ax.set_ylabel(settings.get("ylabel", r'calculated $\mathrm{p}K_a$'))
+            
+            # Add a grid
+            ax.grid()
+            
+            # Set equal axis ticks
+            commonAxis = trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
+            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
+            ax.set_xticks(np.arange(*commonLimits, 2))
+            ax.set_yticks(np.arange(*commonLimits, 2))
+            
+            # Add diagonal line
+            ax.plot(trainingset["pKa_exp"], trainingset["pKa_exp"], c='r', label=r"$f(x)=x$")
+            
+            # Plot training set
+            for group in trainingset.group.unique():
+                points = trainingset.loc[ trainingset.group == group ]
+                ax.scatter(x=points.pKa_exp, y=points.pKa_calc, s=10, label=group)
+            
+            # Add the legend
+            fig.legend(loc=settings.get("legendLoc", "upper left"))
+            
+            return fig
         
-        # Create an empty plot.
-        fig = plt.figure()
-        ax1 = fig.add_subplot(111)
-        
-        # Add title and labels
-        ax1.set_title(getSettings("title", "Training Set"))
-        ax1.set_xlabel(getSettings("xlabel", r'experimental $\mathrm{p}K_a$'))
-        ax1.set_ylabel(getSettings("ylabel", r'calculated $\mathrm{p}K_a$'))
-        
-        # Add a grid
-        ax1.grid()
-        
-        # Set equal axis ticks
-        commonAxis = trainingset["pKa_calc"] + trainingset["pKa_exp"]
-        commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-        ax1.set_xticks(np.arange(*commonLimits, 2))
-        ax1.set_yticks(np.arange(*commonLimits, 2))
-        
-        # Add diagonal line
-        ax1.plot(trainingset["pKa_exp"], trainingset["pKa_exp"], c='r', label=r"$f(x)=x$")
-        
-        # Plot training set
-        groups = list(set(trainingset["group"]))
-        for group in groups:
-            x = [ x for index, x in enumerate(trainingset["pKa_exp"]) if trainingset["group"][index] == group ]
-            y = [ y for index, y in enumerate(trainingset["pKa_calc"]) if trainingset["group"][index] == group ]
-            ax1.scatter(x=x, y=y, s=10, label=group)
-        
-        # Add the legend
-        fig.legend(loc=getSettings("legendLoc", "upper left"))
-        
+        # Create plot
+        fig = plot_training( csvFile = self.input()["csv"].path, 
+                             settings = settings_dict.get("globalSettings", {}) | settings_dict.get("training", {}) )
         # Save the figure to the output file.
-        saveFig(self.output()[plotName], fig)
+        saveFig(self.output()["training"], fig)
         print("TRAININGS PLOT DONE")
         
         #
         #   CREATE SECOND PLOT: LFER
         #
-        # Get settings for the first plot
-        plotName = self.LIST_OF_IMAGE_FILES[1]
-        getSettings = self.getPyplotSettingsHandler(plotName)
+        def plot_LFER(csvFile, settings):
+            # Read output file of last job
+            data = pd.read_csv(csvFile)
+            # Get the training set
+            trainingset = data.loc[ data.set == "training" ]
         
-        # Create an empty plot.
-        fig = plt.figure()
-        ax1 = fig.add_subplot(111)
+            # Create an empty plot.
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            
+            # Add title and labels
+            ax.set_title(settings.get("title", "LFER"))
+            ax.set_ylabel(settings.get("ylabel", r'experimental $\mathrm{p}K_a$'))
+            ax.set_xlabel(settings.get("xlabel", r'calculated $\mathrm{p}K_a$'))
+            
+            # Add a grid
+            ax.grid()
+            
+            # Set equal axis ticks
+            commonAxis = trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
+            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
+            ax.set_xticks(np.arange(*commonLimits, 2))
+            ax.set_yticks(np.arange(*commonLimits, 2))
+            
+            
+            # Add diagonal line
+            ax.plot(trainingset["pKa_calc"], trainingset["pKa_calc"], c='r', label=r"$f(x)=x$")
+            
+            # Add regression line to plot
+            ax.plot( trainingset.pKa_calc, trainingset.pKa_corr, c='g', label=settings.get("regressionLabel", "LFER") )
+            
+            # Plot training set
+            for group in trainingset.group.unique():
+                points = trainingset.loc[trainingset.group == group]
+                ax.scatter(x=points.pKa_calc, y=points.pKa_exp, s=10, label=group)
+            
+            # Add the legend
+            fig.legend(loc=settings.get("legendLoc", "upper left"))
+            
+            return fig
         
-        # Add title and labels
-        ax1.set_title(getSettings("title", "LFER"))
-        ax1.set_ylabel(getSettings("ylabel", r'experimental $\mathrm{p}K_a$'))
-        ax1.set_xlabel(getSettings("xlabel", r'calculated $\mathrm{p}K_a$'))
-        
-        # Add a grid
-        ax1.grid()
-        
-        # Set equal axis ticks
-        commonAxis = trainingset["pKa_calc"] + trainingset["pKa_exp"]
-        commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-        ax1.set_xticks(np.arange(*commonLimits, 2))
-        ax1.set_yticks(np.arange(*commonLimits, 2))
-        
-        
-        # Add diagonal line
-        ax1.plot(trainingset["pKa_calc"], trainingset["pKa_calc"], c='r', label=r"$f(x)=x$")
-        
-        # Add regression line to plot
-        # Get the x coordinates of the regression line as the minimal and maximal x-cordinates of the training set
-        lineX = np.array([min(trainingset["pKa_calc"]), max(trainingset["pKa_calc"])])
-        # Predict the y coordinates of the linear regression with the x coordinates.
-        lineY = model().coef_ * lineX + model().intercept_
-        # Add a line to the plot
-        ax1.plot( lineX, lineY, c='g', label=getSettings("regressionLabel", "LFER") )
-        
-        # Plot training set
-        groups = list(set(trainingset["group"]))
-        for group in groups:
-            x = [ x for index, x in enumerate(trainingset["pKa_calc"]) if trainingset["group"][index] == group ]
-            y = [ y for index, y in enumerate(trainingset["pKa_exp"]) if trainingset["group"][index] == group ]
-            ax1.scatter(x=x, y=y, s=10, label=group)
-        
-        # Add the legend
-        fig.legend(loc=getSettings("legendLoc", "upper left"))
-        
+        # Create plot
+        fig = plot_LFER( csvFile = self.input()["csv"].path, 
+                         settings = settings_dict.get("globalSettings", {}) | settings_dict.get("LFER", {}) )
         # Save the figure to the output file.
-        saveFig(self.output()[plotName], fig)
+        saveFig(self.output()["LFER"], fig)
         print("LFER PLOT DONE")
         
         #
         #   CREATE THIRD PLOT: VALIDATION SET
         #
-        # Get settings for the first plot
-        plotName = self.LIST_OF_IMAGE_FILES[2]
-        getSettings = self.getPyplotSettingsHandler(plotName)
+        def plot_validation(csvFile, settings):
+            # Read output file of last job
+            data = pd.read_csv(csvFile)
+            # Get the validation set
+            validationset = data.loc[ data.set == "validation" ]
+            
+            # Create an empty plot.
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            
+            # Add title and labels
+            ax.set_title(settings.get("title", "Validation Set"))
+            ax.set_xlabel(settings.get("xlabel", r'experimental $\mathrm{p}K_a$'))
+            ax.set_ylabel(settings.get("ylabel", r'calculated & LFER-corrected $\mathrm{p}K_a$'))
+            
+            # Add a grid
+            ax.grid()
+            
+            # Set equal axis ticks
+            commonAxis = validationset["pKa_calc"].tolist() + validationset["pKa_exp"].tolist()
+            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
+            ax.set_xticks(np.arange(*commonLimits, 2))
+            ax.set_yticks(np.arange(*commonLimits, 2))
+            
+            
+            # Add diagonal line
+            ax.plot(validationset["pKa_exp"], validationset["pKa_exp"], c='r', label=r"$f(x)=x$")
+            
+            # Plot validation set
+            # corrected theoretical pKa against experimental pKa
+            for group in validationset.group.unique():
+                points = validationset.loc[ validationset.group == group ]
+                ax.scatter(x=points.pKa_exp, y=points.pKa_corr, s=10, label=group)
+            
+            # Add the legend
+            fig.legend(loc=settings.get("legendLoc", "upper left"))
+            
+            return fig
         
-        # Create an empty plot.
-        fig = plt.figure()
-        ax1 = fig.add_subplot(111)
-        
-        # Add title and labels
-        ax1.set_title(getSettings("title", "Validation Set"))
-        ax1.set_xlabel(getSettings("xlabel", r'experimental $\mathrm{p}K_a$'))
-        ax1.set_ylabel(getSettings("ylabel", r'calculated & LFER-corrected $\mathrm{p}K_a$'))
-        
-        # Add a grid
-        ax1.grid()
-        
-        # Set equal axis ticks
-        commonAxis = validationset["pKa_calc"] + validationset["pKa_exp"]
-        commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-        ax1.set_xticks(np.arange(*commonLimits, 2))
-        ax1.set_yticks(np.arange(*commonLimits, 2))
-        
-        
-        # Add diagonal line
-        ax1.plot(validationset["pKa_exp"], validationset["pKa_exp"], c='r', label=r"$f(x)=x$")
-        
-        # Plot validation set
-        groups = list(set(validationset["group"]))
-        for group in groups:
-            x = [ x for index, x in enumerate(validationset["pKa_exp"]) if validationset["group"][index] == group ]
-            # Get the calculated pKa of the validation set corrected with the LFER.
-            y = [ model().coef_ * y + model().intercept_ 
-                  for index, y in enumerate(validationset["pKa_calc"]) if validationset["group"][index] == group ]
-            ax1.scatter(x=x, y=y, s=10, label=group)
-        
-        # Add the legend
-        fig.legend(loc=getSettings("legendLoc", "upper left"))
-        
+        # Create plot
+        fig = plot_validation( csvFile = self.input()["csv"].path, 
+                              settings = settings_dict.get("globalSettings", {}) | settings_dict.get("validation", {}) )
         # Save the figure to the output file.
-        saveFig(self.output()[plotName], fig)
+        saveFig(self.output()["validation"], fig)
         print("VALIDATION PLOT DONE")
         
         #
         #   CREATE FOURTH PLOT: OVERVIEW
         #
-        # Get settings for the first plot
-        plotName = self.LIST_OF_IMAGE_FILES[3]
-        getSettings = self.getPyplotSettingsHandler(plotName)
-        
-        # Create an empty plot.
-        fig = plt.figure()
-        ax1 = fig.add_subplot(111)
-        
-        # Add title and labels
-        ax1.set_title(getSettings("title", "Data Set Overview"))
-        ax1.set_xlabel(getSettings("xlabel", r'experimental $\mathrm{p}K_a$'))
-        ax1.set_ylabel(getSettings("ylabel", r'calculated $\mathrm{p}K_a$'))
-        
-        # Add a grid
-        ax1.grid()
-        
-        # Set equal axis ticks
-        commonAxis = validationset["pKa_calc"] + validationset["pKa_exp"] + trainingset["pKa_calc"] + trainingset["pKa_exp"]
-        commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
-        ax1.set_xticks(np.arange(*commonLimits, 2))
-        ax1.set_yticks(np.arange(*commonLimits, 2))
-        
-        # Add diagonal line
-        diag_x = sorted( validationset["pKa_exp"] + trainingset["pKa_exp"] )
-        ax1.plot(diag_x, diag_x, c='r', label=r"$f(x)=x$")
-        
-        # Plot validation and training set
-        groups = list(set(validationset["group"]+trainingset["group"]))
-        for group in groups:
-            color = next(ax1._get_lines.prop_cycler)['color']
-            # Plot the validation set
-            x = [ x for index, x in enumerate(validationset["pKa_exp"]) if validationset["group"][index] == group ]
-            y = [ y for index, y in enumerate(validationset["pKa_calc"]) if validationset["group"][index] == group ]
-            ax1.scatter(x=x, y=y, s=10, c=color, label=group+" (v)", marker="^")
-            # Plot the training set
-            x = [ x for index, x in enumerate(trainingset["pKa_exp"]) if trainingset["group"][index] == group ]
-            y = [ y for index, y in enumerate(trainingset["pKa_calc"]) if trainingset["group"][index] == group ]
-            ax1.scatter(x=x, y=y, s=10, c=color, label=group+" (t)", marker="D")
+        def plot_overview(csvFile, settings):
+            # Read output file of last job
+            data = pd.read_csv(csvFile)
+            # Get the validation set
+            validationset = data.loc[ data.set == "validation" ]
+            # Get the training set
+            trainingset = data.loc[ data.set == "training" ]
             
-        # Add the legend
-        fig.legend(loc=getSettings("legendLoc", "upper left"))
+            # Create an empty plot.
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            
+            # Add title and labels
+            ax.set_title(settings.get("title", "Data Set Overview"))
+            ax.set_xlabel(settings.get("xlabel", r'experimental $\mathrm{p}K_a$'))
+            ax.set_ylabel(settings.get("ylabel", r'calculated $\mathrm{p}K_a$'))
+            
+            # Add a grid
+            ax.grid()
+            
+            # Set equal axis ticks
+            commonAxis = validationset["pKa_calc"].tolist() + validationset["pKa_exp"].tolist() + trainingset["pKa_calc"].tolist() + trainingset["pKa_exp"].tolist()
+            commonLimits = [np.floor(min(commonAxis)), np.ceil(max(commonAxis))]
+            ax.set_xticks(np.arange(*commonLimits, 2))
+            ax.set_yticks(np.arange(*commonLimits, 2))
+            
+            # Add diagonal line
+            points = data.loc[ data.set.isin(["training", "validation"]) ]
+            ax.plot(points.pKa_exp, points.pKa_exp, c='r', label=r"$f(x)=x$")
+            
+            # Plot validation and training set
+            for group in pd.concat([validationset.group, trainingset.group]).unique():
+                color = next(ax._get_lines.prop_cycler)['color']
+                # Plot the validation set
+                points = validationset.loc[ validationset.group == group ]
+                ax.scatter(x=points.pKa_exp, y=points.pKa_calc, s=10, c=color, label=group+" (v)", marker="^")
+                # Plot the training set
+                points = trainingset.loc[ trainingset.group == group ]
+                ax.scatter(x=points.pKa_exp, y=points.pKa_calc, s=10, c=color, label=group+" (t)", marker="D")
+                
+            # Add the legend
+            fig.legend(loc=settings.get("legendLoc", "upper left"))
+            
+            return fig
         
+        # Create plot
+        fig = plot_overview( csvFile = self.input()["csv"].path, 
+                             settings = settings_dict.get("globalSettings", {}) | settings_dict.get("overview", {}) )
         # Save the figure to the output file.
-        saveFig(self.output()[plotName], fig)
-        print("VALIDATION PLOT DONE")
+        saveFig(self.output()["overview"], fig)
+        print("OVERVIEW PLOT DONE")
         
         print("PLOTS DONE")
         
@@ -625,7 +652,7 @@ class TaskScheduler(luigi.WrapperTask):
     yaml_inp = luigi.Parameter()
     
     def requires(self):
-        return( LFER_Correction(self.yaml_inp) )
+        return( LFER_Plotting(self.yaml_inp) )
     
     def run(self):
         pass

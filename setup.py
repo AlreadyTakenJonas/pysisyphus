@@ -43,6 +43,7 @@ setup(
         "scipy",
         "sympy",
         "scikit-learn",
+        "pandas",
     ],
     # Install locally with
     #   pip install -e .[extra]
