@@ -67,6 +67,11 @@ def plot_training(csvFile, settings={}):
 def plot_LFER(csvFile, settings={}):
     # Read output file of last job
     data = pd.read_csv(csvFile)
+
+    # Replace group names
+    data = data.replace(to_replace = "molnupiravir", value = "Aminoanalog")
+    data = data.replace(to_replace = "molnupiravirTautomere", value = "Iminoanalog")
+
     # Get the training set
     trainingset = data.loc[ data.set == "training" ]
 
@@ -75,9 +80,9 @@ def plot_LFER(csvFile, settings={}):
     ax = fig.add_subplot(111)
     
     # Add title and labels
-    ax.set_title(settings.get("title", "LFER"))
-    ax.set_ylabel(settings.get("ylabel", r'experimental $\mathrm{p}K_a$'))
-    ax.set_xlabel(settings.get("xlabel", r'calculated $\mathrm{p}K_a$'))
+    ax.set_title(settings.get("title", "LFER-Korrektur"))
+    ax.set_ylabel(settings.get("ylabel", r'$\mathrm{p}K_{S,\mathrm{exp}}$'))
+    ax.set_xlabel(settings.get("xlabel", r'$\mathrm{p}K_{S,\mathrm{calc}}$'))
     
     # Add a grid
     ax.grid()
@@ -165,6 +170,11 @@ def plot_validation(csvFile, settings={}):
 def plot_overview(csvFile, settings={}):
     # Read output file of last job
     data = pd.read_csv(csvFile)
+
+    # Replace group names
+    data = data.replace(to_replace = "molnupiravir", value = "Aminoanalog")
+    data = data.replace(to_replace = "molnupiravirTautomere", value = "Iminoanalog")
+
     # Get the validation set
     validationset = data.loc[ data.set == "validation" ]
     # Get the training set
@@ -175,9 +185,9 @@ def plot_overview(csvFile, settings={}):
     ax = fig.add_subplot(111)
     
     # Add title and labels
-    ax.set_title(settings.get("title", "Data Set Overview"))
-    ax.set_xlabel(settings.get("xlabel", r'experimental $\mathrm{p}K_a$'))
-    ax.set_ylabel(settings.get("ylabel", r'calculated $\mathrm{p}K_a$'))
+    ax.set_title(settings.get("title", "LFER-Datensatz"))
+    ax.set_xlabel(settings.get("xlabel", r'$\mathrm{p}K_{S,\mathrm{exp}}$'))
+    ax.set_ylabel(settings.get("ylabel", r'$\mathrm{p}K_{S,\mathrm{calc}}$'))
     
     # Add a grid
     ax.grid()
